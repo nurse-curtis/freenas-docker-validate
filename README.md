@@ -60,6 +60,12 @@ $ freenas-docker-validate -q --search freenas/
 $ freenas-docker-validate --dockerfile Dockerfile
 ```
 
+## Check a local git repo
+This will check any Dockerfile in the specified directory tree.
+```
+$ freenas-docker-validate --dockerfile docker-images
+```
+
 ## Check a Docketfile on github
 ```
 $ freenas-docker-validate --dockerurl https://raw.githubusercontent.com/freenas/docker-images/master/xdm/Dockerfile
