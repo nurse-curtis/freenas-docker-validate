@@ -195,7 +195,7 @@ class Dockerfile(object):
                                 self._log_error("invalid keyword {0} in: {1}: {2}".format(e_k, k, v))
             continue
 
-        return "\n".join(self._errors)
+        return self._errors
 
 class DockerImage(Dockerfile):
     """Wrapper for an image that is automatically built
