@@ -259,7 +259,7 @@ def validate_dockerfile(options, filename):
 
     try:
         fp = open(os.path.expanduser(filename))
-        content = Dockerfile(fp.read())
+        content = fp.read()
         fp.close()
     except IOError as e:
         print("{0}".format(e))
