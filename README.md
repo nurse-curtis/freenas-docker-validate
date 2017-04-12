@@ -13,10 +13,11 @@ are automatically built will be shown.  Repositories that are not
 automatically build will not contain a Dockerfile.
 
 # Usage
-```freenas-docker-validate [-h] [--search SEARCH [SEARCH ...]]
-                               [--dockerfile DOCKERFILE [DOCKERFILE ...]]
-                               [--dockerurl DOCKERURL [DOCKERURL ...]]
-                               [--verbose | --quiet]
+```
+freenas-docker-validate [-h] [--search SEARCH [SEARCH ...]]
+                             [--dockerfile DOCKERFILE [DOCKERFILE ...]]
+                             [--dockerurl DOCKERURL [DOCKERURL ...]]
+                             [--verbose | --quiet]
 
 Query FreeNAS docker containers
 
