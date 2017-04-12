@@ -177,7 +177,7 @@ class Dockerfile(object):
             # Validate network mode
             if k_short == "primary-network-mode":
                 if not v in ["NAT", "BRIDGED", "HOST", "NONE"]:
-                    self._log_error("invalid network mode in {0}: {1}", format(k, v))
+                    self._log_error("invalid network mode in {0}: {1}".format(k, v))
                 continue
 
             # validate entries containing json
