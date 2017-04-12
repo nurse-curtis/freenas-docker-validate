@@ -1,0 +1,356 @@
+#!/usr/bin/env python3
+
+# Copyright 2017 Jeffrey C Honig
+# All rights reserved
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted providing that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+# IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+#
+#####################################################################
+
+import argparse
+import os
+import re
+import requests
+import shutil
+import sys
+import tempfile
+
+# We need stuff only present on a FreeNAS install
+try:
+    import dockerfile_parse
+    import dockerhub
+    from freenas.dispatcher.jsonenc import loads
+except ImportError:
+    print("This script must be run on a FreeNAS installation", file=sys.stderr)
+    sys.exit(1)
+
+# Copied from /usr/local/lib/containerd/src/main.py
+DOCKER_LABELS_MAP = {
+    'org.freenas.autostart': {'default': 'false', 'preset': 'autostart'},
+    'org.freenas.capabilities-add': {'default': '', 'preset': 'capabilities_add'},
+    'org.freenas.capabilities-drop': {'default': '', 'preset': 'capabilities_drop'},
+    'org.freenas.command': {'default': '', 'preset': 'command'},
+    'org.freenas.dhcp': {'default': 'false', 'preset': 'bridge.dhcp'},
+    'org.freenas.expose-ports-at-host': {'default': 'false', 'preset': 'expose_ports'},
+    'org.freenas.immutable': {'default': '', 'preset': 'immutable'},
+    'org.freenas.interactive': {'default': 'false', 'preset': 'interactive'},
+    'org.freenas.port-mappings': {'default': '', 'preset': 'ports'},
+    'org.freenas.primary-network-mode': {'default': None, 'preset': 'primary_network_mode'},
+    'org.freenas.privileged': {'default': 'false', 'preset': 'privileged'},
+    'org.freenas.settings': {'default': [], 'preset': 'settings'},
+    'org.freenas.static-volumes': {'default': [], 'preset': 'static_volumes'},
+    'org.freenas.upgradeable': {'default': 'false', 'preset': 'upgradeable'},
+    'org.freenas.version': {'default': '0', 'preset': 'version'},
+    'org.freenas.volumes': {'default': [], 'preset': 'volumes'},
+    'org.freenas.web-ui-path': {'default': '', 'preset': 'web_ui_path'},
+    'org.freenas.web-ui-port': {'default': '', 'preset': 'web_ui_port'},
+    'org.freenas.web-ui-protocol': {'default': '', 'preset': 'web_ui_protocol'},
+}
+
+# For validating json parameters
+KEYWORDS_MAP = {
+    'volumes': ["name", "descr", "readonly"],
+    'static-volumes': ["container_path", "host_path", "readonly"],
+    'settings': ["env", "descr", "optional"]
+}
+
+class Dockerfile(object):
+    """Wrapper for a Dockerfile
+
+    dockerfile = Dockerfile(content)
+
+    dockerfile.validate_labels() will return a list of errors found in the org.freenas. labels.
+    """
+    def __init__(self, content, parser=dockerfile_parse.DockerfileParser()):
+        self._parser = parser
+
+        self._errors = []
+        self._labels = None
+
+        self._parser.content = content
+
+    def __str__(self):
+        """Format DockerFile info"""
+        lines = list()
+        for k, v in self._labels.items():
+            # Ignore non-FreeNAS labels
+            if not k.startswith("org.freenas."):
+                continue
+
+            k_short = k.split(".")[2]
+
+            if k_short in ["volumes", "static-volumes", "settings"]:
+                try:
+                    j = loads(v)
+                except ValueError as e:
+                    continue
+                v = ""
+                for e in j:
+                    l = list()
+                    for k2 in KEYWORDS_MAP[k_short]:
+                        if k2 in e:
+                            l.append("{0}: {1}".format(k2, e[k2]))
+                    v += "\n\t\t\t" + "\n\t\t\t\t".join(l)
+
+            if k_short == "port-mappings":
+                v = "\n\t\t\t" + "\n\t\t\t".join(v.split(","))
+
+            lines.append("\t{0}:\t{1}".format(k_short, v))
+
+        return "\n".join(lines)
+
+    @property
+    def errors(self):
+        """Return the list of errors from parsing"""
+        return self._errors
+    
+    def _log_error(self, error):
+        self._errors.append("{0}:\t{1}".format(self.repo_name, error))
+
+    def _parse_labels(self):
+        if self._labels == None:
+            try:
+                self._labels = self._parser.labels
+            except ValueError as e:
+                self._log_error("error parsing labels: {0}".format(e))
+        elif self._labels == False:
+            return False
+
+        return True
+
+    def validate_labels(self):
+        """Validate FreeNAS labels
+
+        Returns a list of error found with org.freenas labels"""
+        if not self._parse_labels():
+            return
+
+        for k, v in self._labels.items():
+            # List non-freenas labels
+            if not k.startswith("org.freenas."):
+                self._log_error("ignoring {0}".format(k))
+                continue
+
+            k_short = k.split(".")[2]
+
+            # validate that it is a known label
+            try:
+                default = DOCKER_LABELS_MAP[k].get('default')
+            except KeyError:
+                self._log_error("unrecognized label {0}: {1}".format(k, v))
+                continue
+
+            # validate true-false data
+            if default in ["true", "false"]:
+                if not v in ["true", "false"]:
+                    self._log_error("invalid true/false value for {0}: {1}".format(k, v))
+                continue
+
+            # validate mappings
+            if k_short == "port-mappings":
+                for mapping in v.split(','):
+                    m = re.match(r'^(\d+):(\d+)/(tcp|udp)$', mapping)
+                    if not m:
+                        self._log_error("invalid mapping in {0}: {1}".format(k, mapping))
+                continue
+
+            # Validate network mode
+            if k_short == "primary-network-mode":
+                if not v in ["NAT", "BRIDGED", "HOST", "NONE"]:
+                    self._log_error("invalid network mode in {0}: {1}", format(k, v))
+                continue
+
+            # validate entries containing json
+            if k_short in ["volumes", "static-volumes", "settings"]:
+                v = v.strip()
+                if v == "":
+                    continue
+                try:
+                    j = loads(v)
+                except ValueError as e:
+                    self._log_error("syntax error {0} in {1}: {2}".format(e, k, v))
+                else:
+                    for e in j:
+                        for e_k, e_v in e.items():
+                            if not e_k in KEYWORDS_MAP[k_short]:
+                                self._log_error("invalid keyword {0} in: {1}: {2}".format(e_k, k, v))
+            continue
+
+        return "\n".join(self._errors)
+
+class DockerImage(Dockerfile):
+    """Wrapper for an image that is automatically built
+
+    Is a child of the Dockerfile object, adds a bit of formatting to that"""
+
+    def __init__(self, repo, hub):
+        self.repo_name = repo['repo_name']
+        self.short_description = repo['short_description']
+        self.pull_count = repo['pull_count']
+        self.star_count = repo['star_count']
+        self.is_official = repo['is_official']
+        self.is_automated = repo['is_automated']
+
+        self._errors = []
+        self._labels = None
+
+        Dockerfile.__init__(self, hub.get_dockerfile(self.repo_name))
+
+    def __str__(self):
+        """Format Repo info"""
+        lines = list()
+        lines.append("{0}:\t{1}".format(self.repo_name, self.short_description))
+        lines.append("\timage:\t\tpulls: {0} stars: {1} official: {2}".format(self.pull_count, self.star_count, self.is_official))
+        lines.append(Dockerfile.__str__(self))
+        return "\n".join(lines)
+
+def validate_content(options, name, content):
+    """Validate a Dockerfile once we have the content"""
+
+    dockerfile = Dockerfile(content)
+
+    errors = dockerfile.validate_labels()
+    if errors:
+        print("{0}: \t{1}".format(name, "\n".join(errors)))
+
+    if not options.quiet:
+        print("{0}:".format(name))
+    if options.verbose:
+        print(dockerfile)
+
+
+def validate_dockerurl(options, url):
+    """Validate the Dockerfile at a given URL"""
+
+    try:
+        r = requests.get(url)
+    except requests.exceptions.ConnectionError as e:
+        print("{0}: {1}".format(url, e))
+        return
+
+    if r.status_code != 200:
+        print("{0}: {1} {2}".format(url, r.status_code, r.reason))
+        return
+
+    validate_content(options, url, r.text)
+
+def validate_dockerfile(options, filename):
+    """Validate the given DockerFile"""
+
+    try:
+        fp = open(os.path.expanduser(filename))
+        content = Dockerfile(fp.read())
+        fp.close()
+    except IOError as e:
+        print("{0}".format(e))
+        return
+
+    validate_content(options, filename, content)
+
+def hub_search(options, pattern):
+    """Search Docker Hub for the given images and validate them"""
+
+    images = dict()
+    
+    with dockerhub.DockerHub() as hub:
+        for i in hub.search(pattern):
+
+            # Reduce search
+            if not i['repo_name'].startswith(pattern):
+                continue
+
+            # Ignore Repos that do not have automatic builds
+            if not i['is_automated']:
+                continue
+            
+            image = DockerImage(i, hub)
+            image.validate_labels()
+            images[image.repo_name] = image
+
+    # Validate labels
+    for repo_name in sorted(images.keys()):
+        image = images[repo_name]
+        if image.errors:
+            print("\n".join(image.errors), file=sys.stderr)
+
+    # Print image info
+    for repo_name in sorted(images.keys()):
+        image = images[repo_name]
+        if not options.quiet and not options.verbose:
+            print("{0}:\t{1}".format(repo_name, image.short_description))
+        if options.verbose:
+            print(image)
+
+def main():
+    """This is where it's at"""
+
+    argparser = argparse.ArgumentParser(description="Query FreeNAS docker containers")
+
+    argparser.add_argument('--search', nargs='+',
+                           help='Search Docker Hub for the string COLLECTION/FILTER, i.e. jchonig/freenas-')
+    argparser.add_argument('--dockerfile', '-f', nargs='+',
+                           help='Run a syntax check on the specified Dockerfile')
+    argparser.add_argument('--dockerurl', '-u', nargs='+',
+                           help="Run a syntax check on the Dockerfile at given url")
+
+    group = argparser.add_mutually_exclusive_group()
+    group.add_argument("--verbose", "-v",
+                       action='store_true', default=False,
+                       help="Pretty-print the contents of the org.freenas labels")
+    group.add_argument("--quiet", "-q",
+                       action='store_true', default=False,
+                       help="Do not list the names of the images found")
+
+    # Parse args
+    options = argparser.parse_args()
+
+    try:
+        # Process local files
+        if options.dockerfile:
+            for dockerfile in options.dockerfile:
+                validate_dockerfile(options, dockerfile)
+
+        # Process URLs
+        if options.dockerurl:
+            for url in options.dockerurl:
+                validate_dockerurl(options, url)
+
+        # Process Docker Images
+        if options.search:
+            # Use a temporary directory; the FreeNAS utils will overwrite a local Dockerfile
+            cwd = os.getcwd()
+            tmpdir = tempfile.mkdtemp()
+            try:
+                os.chdir(tmpdir)
+                for pattern in options.search:
+                    hub_search(options, pattern)
+            finally:
+                os.chdir(cwd)
+                shutil.rmtree(tmpdir)
+    except KeyboardInterrupt:
+        print()
+        sys.exit(1)
+
+    sys.exit(0)            
+
+if __name__ == '__main__':
+    main()
