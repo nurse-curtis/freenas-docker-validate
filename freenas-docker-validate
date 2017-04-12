@@ -309,7 +309,7 @@ def main():
     argparser.add_argument('--search', nargs='+',
                            help='Search Docker Hub for the string COLLECTION/FILTER, i.e. jchonig/freenas-')
     argparser.add_argument('--dockerfile', '-f', nargs='+',
-                           help='Run a syntax check on the specified Dockerfile')
+                           help='Run a syntax check on the specified Dockerfile or all Dockerfiles in the directory tree')
     argparser.add_argument('--dockerurl', '-u', nargs='+',
                            help="Run a syntax check on the Dockerfile at given url")
 
@@ -328,7 +328,13 @@ def main():
         # Process local files
         if options.dockerfile:
             for dockerfile in options.dockerfile:
-                validate_dockerfile(options, dockerfile)
+                if not os.path.isdir(dockerfile):
+                    validate_dockerfile(options, dockerfile)
+                else:
+                    for dirpath, dirnames, files in os.walk(dockerfile):
+                        for fn in files:
+                            if fn == "Dockerfile":
+                                validate_dockerfile(options, os.path.join(dirpath, fn))
 
         # Process URLs
         if options.dockerurl:
