@@ -27,7 +27,8 @@ optional arguments:
                         Search Docker Hub for the string COLLECTION/FILTER,
                         i.e. jchonig/freenas-
   --dockerfile DOCKERFILE [DOCKERFILE ...], -f DOCKERFILE [DOCKERFILE ...]
-                        Run a syntax check on the specified Dockerfile
+                        Run a syntax check on the specified Dockerfile or all
+                        Dockerfiles in the directory tree
   --dockerurl DOCKERURL [DOCKERURL ...], -u DOCKERURL [DOCKERURL ...]
                         Run a syntax check on the Dockerfile at given url
   --verbose, -v         Pretty-print the contents of the org.freenas labels
