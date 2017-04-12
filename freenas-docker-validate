@@ -80,8 +80,9 @@ class Dockerfile(object):
 
     dockerfile.validate_labels() will return a list of errors found in the org.freenas. labels.
     """
-    def __init__(self, content, parser=dockerfile_parse.DockerfileParser()):
+    def __init__(self, name, content, parser=dockerfile_parse.DockerfileParser()):
         self._parser = parser
+        self.name = name
 
         self._errors = []
         self._labels = None
@@ -124,7 +125,7 @@ class Dockerfile(object):
         return self._errors
     
     def _log_error(self, error):
-        self._errors.append("{0}:\t{1}".format(self.repo_name, error))
+        self._errors.append("{0}:\t{1}".format(self.name, error))
 
     def _parse_labels(self):
         if self._labels == None:
@@ -203,7 +204,7 @@ class DockerImage(Dockerfile):
     Is a child of the Dockerfile object, adds a bit of formatting to that"""
 
     def __init__(self, repo, hub):
-        self.repo_name = repo['repo_name']
+        name = repo['repo_name']
         self.short_description = repo['short_description']
         self.pull_count = repo['pull_count']
         self.star_count = repo['star_count']
@@ -213,12 +214,12 @@ class DockerImage(Dockerfile):
         self._errors = []
         self._labels = None
 
-        Dockerfile.__init__(self, hub.get_dockerfile(self.repo_name))
+        Dockerfile.__init__(self, name, hub.get_dockerfile(name))
 
     def __str__(self):
         """Format Repo info"""
         lines = list()
-        lines.append("{0}:\t{1}".format(self.repo_name, self.short_description))
+        lines.append("{0}:\t{1}".format(self.name, self.short_description))
         lines.append("\timage:\t\tpulls: {0} stars: {1} official: {2}".format(self.pull_count, self.star_count, self.is_official))
         lines.append(Dockerfile.__str__(self))
         return "\n".join(lines)
@@ -226,11 +227,11 @@ class DockerImage(Dockerfile):
 def validate_content(options, name, content):
     """Validate a Dockerfile once we have the content"""
 
-    dockerfile = Dockerfile(content)
+    dockerfile = Dockerfile(name, content)
 
     errors = dockerfile.validate_labels()
     if errors:
-        print("{0}: \t{1}".format(name, "\n".join(errors)))
+        print("\n".join(errors))
 
     if not options.quiet:
         print("{0}:".format(name))
@@ -284,7 +285,7 @@ def hub_search(options, pattern):
             
             image = DockerImage(i, hub)
             image.validate_labels()
-            images[image.repo_name] = image
+            images[image.name] = image
 
     # Validate labels
     for repo_name in sorted(images.keys()):
